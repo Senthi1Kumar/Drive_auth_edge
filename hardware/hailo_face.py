@@ -19,12 +19,13 @@ from pathlib import Path
 
 import numpy as np
 
+from driveauth.preprocess.face import FACE_MODEL_SIZE, face_crop_to_model_blob
 from driveauth.template_store import load_embedding
 from driveauth.types import ModalityResult
 
 logger = logging.getLogger("driveauth.hardware.hailo_face")
 
-_FACE_SIZE = (112, 112)
+_FACE_SIZE = FACE_MODEL_SIZE
 _EMB_DIM = 512
 
 
@@ -147,18 +148,7 @@ def _preprocess_face(frame_bgr: np.ndarray) -> np.ndarray:
     side = min(h, w)
     y0, x0 = (h - side) // 2, (w - side) // 2
     crop = img[y0 : y0 + side, x0 : x0 + side]
-    try:
-        import cv2  # type: ignore
-
-        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-        rgb = cv2.resize(rgb, _FACE_SIZE)
-    except ImportError:
-        rgb = crop[..., ::-1] if crop.shape[-1] == 3 else crop
-        ys = (np.linspace(0, rgb.shape[0] - 1, _FACE_SIZE[1])).astype(np.int32)
-        xs = (np.linspace(0, rgb.shape[1] - 1, _FACE_SIZE[0])).astype(np.int32)
-        rgb = rgb[ys][:, xs]
-    blob = (rgb.astype(np.float32) - 127.5) / 128.0
-    return np.transpose(blob, (2, 0, 1))[np.newaxis]
+    return face_crop_to_model_blob(crop, face_size=_FACE_SIZE)
 
 
 def _try_open_hailo(hef_path: Path):

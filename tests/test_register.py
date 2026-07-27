@@ -29,10 +29,14 @@ def _client():
     return c
 
 
-def _tiny_wav_bytes(seconds: float = 0.5, sr: int = 16_000) -> bytes:
+def _tiny_wav_bytes(seconds: float = 1.5, sr: int = 16_000) -> bytes:
     n = int(sr * seconds)
     t = np.linspace(0, seconds, n, dtype=np.float32)
-    sig = (0.2 * np.sin(2 * np.pi * 220 * t) * 20000).astype(np.int16)
+    carrier = np.sin(2 * np.pi * 220 * t)
+    envelope = 0.5 * (1.0 + np.sin(2 * np.pi * 3.5 * t))
+    noise = np.random.default_rng(0).normal(0.0, 0.01, n).astype(np.float32)
+    sig = (0.35 * carrier * envelope + noise) * 20000
+    sig = np.clip(sig, -32000, 32000).astype(np.int16)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)

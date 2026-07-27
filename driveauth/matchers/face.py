@@ -11,6 +11,7 @@ import numpy as np
 
 from driveauth import config
 from driveauth.matchers.face_pad_features import extract_face_pad_features
+from driveauth.preprocess.face import face_crop_to_model_blob
 from driveauth.matchers.onnx_head import OnnxLogitHead
 from driveauth.stage2_artifacts import (
     FACE_CALIBRATOR,
@@ -419,12 +420,7 @@ class FaceMatcher:
             return None
 
     def _embed_crop_bgr(self, crop_bgr: np.ndarray) -> np.ndarray | None:
-        import cv2  # type: ignore
-
-        face_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-        face_rgb = cv2.resize(face_rgb, self._FACE_SIZE)
-        blob = (face_rgb.astype(np.float32) - 127.5) / 128.0
-        blob = np.transpose(blob, (2, 0, 1))[np.newaxis]
+        blob = face_crop_to_model_blob(crop_bgr, face_size=self._FACE_SIZE)
         input_name = self._session.get_inputs()[0].name
         emb = self._session.run(None, {input_name: blob})[0][0].astype(np.float32)
         norm = float(np.linalg.norm(emb))

@@ -121,42 +121,19 @@ def verify_new_data() -> dict:
 
 
 def retrain() -> dict:
-    py = str(ROOT / ".venv" / "bin" / "python")
+    py = sys.executable
     _run(
         [
             py,
-            "scripts/train_face_pad.py",
+            "scripts/retrain_bio_pipeline.py",
             "--store",
             str(STORE),
             "--data",
             str(DATA),
             "--driver-id",
             DRIVER,
+            "--skip-enroll",
             "--exclude-fallback-crops",
-        ]
-    )
-    _run(
-        [
-            py,
-            "scripts/train_face_calibrator.py",
-            "--store",
-            str(STORE),
-            "--data",
-            str(DATA),
-            "--driver-id",
-            DRIVER,
-        ]
-    )
-    _run(
-        [
-            py,
-            "scripts/train_voice_calibrator.py",
-            "--store",
-            str(STORE),
-            "--data",
-            str(DATA),
-            "--driver-id",
-            DRIVER,
         ]
     )
 

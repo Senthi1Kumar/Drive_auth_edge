@@ -12,6 +12,8 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
+from driveauth.preprocess.face import preprocess_face_crop_bgr
+
 logger = logging.getLogger("driveauth.hardware.capture")
 
 FACE_CROP_SIZE = 112
@@ -127,6 +129,7 @@ def _center_crop_square(frame: np.ndarray, size: int = FACE_CROP_SIZE) -> np.nda
         try:
             import cv2  # type: ignore
 
+            crop = preprocess_face_crop_bgr(crop)
             return cv2.resize(crop, (size, size))
         except ImportError:
             # Nearest-neighbor fallback without OpenCV.
@@ -141,6 +144,7 @@ def _center_crop_square(frame: np.ndarray, size: int = FACE_CROP_SIZE) -> np.nda
     try:
         import cv2  # type: ignore
 
+        crop = preprocess_face_crop_bgr(crop)
         return cv2.resize(crop, (size, size))
     except ImportError:
         ys = (np.linspace(0, crop.shape[0] - 1, size)).astype(np.int32)

@@ -3,26 +3,13 @@
 from __future__ import annotations
 
 import json
-import wave
 from pathlib import Path
 
 import numpy as np
 
+from driveauth.preprocess.voice import load_wav
+
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_wav(path: Path, sr: int = 16_000) -> np.ndarray:
-    with wave.open(str(path), "rb") as w:
-        frames = w.readframes(w.getnframes())
-        audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-        if w.getnchannels() == 2:
-            audio = audio.reshape(-1, 2).mean(axis=1)
-        if w.getframerate() != sr:
-            ratio = sr / w.getframerate()
-            idx = (np.arange(int(len(audio) * ratio)) / ratio).astype(int)
-            idx = np.clip(idx, 0, len(audio) - 1)
-            audio = audio[idx]
-        return audio.astype(np.float32)
 
 
 def far_frr(genuine: list[float], attack: list[float], thr: float) -> tuple[float, float]:

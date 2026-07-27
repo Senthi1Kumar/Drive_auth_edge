@@ -887,34 +887,27 @@ async def register_voice(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid WAV: {exc}") from exc
 
-    # Live quality feedback — same gate the matcher uses (duration / SNR / clip).
-    voice_quality: dict[str, Any] = {}
-    try:
-        import wave
+    from driveauth.preprocess.voice import load_wav as load_voice_wav
+    from driveauth.quality_gate import score_voice
 
-        from driveauth.quality_gate import score_voice
-
-        with wave.open(str(path), "rb") as w:
-            sr = w.getframerate()
-            n = w.getnframes()
-            pcm = np.frombuffer(w.readframes(n), dtype=np.int16).astype(np.float32)
-            if w.getnchannels() > 1:
-                pcm = pcm.reshape(-1, w.getnchannels()).mean(axis=1)
-            audio = pcm / 32768.0
-        ok, q, notes = score_voice(audio, sr)
-        voice_quality = {
-            "quality_ok": bool(ok),
-            "quality": float(q),
-            "duration_s": float(audio.size / max(sr, 1)),
-            "notes": list(notes),
-        }
-    except Exception as exc:
-        voice_quality = {
-            "quality_ok": None,
-            "quality": None,
-            "duration_s": None,
-            "notes": [f"score_voice_failed:{type(exc).__name__}"],
-        }
+    audio = load_voice_wav(path)
+    ok, q, notes = score_voice(audio, 16_000)
+    voice_quality = {
+        "quality_ok": bool(ok),
+        "quality": float(q),
+        "duration_s": float(audio.size / 16_000),
+        "notes": list(notes),
+    }
+    if not ok:
+        path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "voice quality rejected "
+                f"({', '.join(notes) or 'low_quality'}): "
+                "speak clearly for at least 1 second, reduce background noise, then retry"
+            ),
+        )
 
     return {
         "status": "ok",
@@ -1213,6 +1206,17 @@ async def standalone_auth(
         face_raw = await face.read()
         if face_raw:
             face_bgr = _decode_face_jpeg(face_raw)
+            from driveauth.matchers.face import assess_face_framing
+
+            framing = assess_face_framing(face_bgr)
+            if not framing.get("ok"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"face framing rejected ({framing.get('reason')}): "
+                        "move closer, face the camera, fill more of the frame, then retry"
+                    ),
+                )
 
     try:
         auth = get_auth(

@@ -11,25 +11,12 @@ from pathlib import Path
 import numpy as np
 
 from driveauth.matchers.onnx_head import OnnxLogitHead
+from driveauth.preprocess.voice import preprocess
 from driveauth.stage2_artifacts import VOICE_CALIBRATOR, resolve_bio_artifact
 from driveauth.template_store import load_embedding
 from driveauth.types import ModalityResult
 
 logger = logging.getLogger("driveauth.matchers.voice")
-
-_PREEMPH = 0.97
-_RMS_TGT = 0.08
-_RMS_FLOOR = 1e-6
-
-
-def preprocess(audio: np.ndarray) -> np.ndarray:
-    out = np.empty_like(audio, dtype=np.float32)
-    out[0] = audio[0]
-    out[1:] = audio[1:] - _PREEMPH * audio[:-1]
-    rms = float(np.sqrt(np.mean(out**2)))
-    if rms > _RMS_FLOOR:
-        out *= _RMS_TGT / rms
-    return out
 
 
 class VoiceMatcher:
@@ -169,7 +156,7 @@ class VoiceMatcher:
         try:
             import torch
 
-            proc = preprocess(audio_f32.astype(np.float32))
+            proc = preprocess(audio_f32.astype(np.float32), sample_rate)
             wav = torch.from_numpy(proc).unsqueeze(0).to(self._device)
             with torch.no_grad():
                 emb = self._model.encode_batch(wav)

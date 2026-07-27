@@ -11,6 +11,12 @@ import numpy as np
 
 from driveauth.matchers.face import FaceMatcher
 from driveauth.matchers.voice import VoiceMatcher
+from driveauth.preprocess.voice import (
+    TARGET_SAMPLE_RATE,
+    float32_to_wav_bytes,
+    load_wav,
+    normalize_capture_audio,
+)
 from driveauth.ood_detector import OODDetector
 from driveauth.profile_store import ProfileStore
 from driveauth.key_protection import KeyProtector, SoftwareKeyProtector
@@ -141,50 +147,16 @@ def save_voice_wav_bytes(
 
     if sampwidth != 2:
         raise ValueError("expected 16-bit PCM WAV")
-    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
     if n_channels > 1:
         audio = audio.reshape(-1, n_channels).mean(axis=1)
-    target_sr = 16_000
-    if framerate != target_sr and len(audio) > 0:
-        ratio = target_sr / float(framerate)
-        idx_map = (np.arange(int(len(audio) * ratio)) / ratio).astype(int)
-        idx_map = np.clip(idx_map, 0, len(audio) - 1)
-        audio = audio[idx_map]
-    pcm = np.clip(audio, -32768, 32767).astype(np.int16)
-    with wave.open(str(path), "wb") as dst:
-        dst.setnchannels(1)
-        dst.setsampwidth(2)
-        dst.setframerate(target_sr)
-        dst.writeframes(pcm.tobytes())
+    audio, _ = normalize_capture_audio(audio, framerate, target_sr=TARGET_SAMPLE_RATE)
+    path.write_bytes(float32_to_wav_bytes(audio, TARGET_SAMPLE_RATE))
     return path
 
 
-def _load_wav(path: Path, sr: int = 16_000) -> np.ndarray:
-    try:
-        with wave.open(str(path), "rb") as w:
-            assert w.getnchannels() in (1, 2)
-            frames = w.readframes(w.getnframes())
-            audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-            if w.getnchannels() == 2:
-                audio = audio.reshape(-1, 2).mean(axis=1)
-            if w.getframerate() != sr:
-                ratio = sr / w.getframerate()
-                idx = (np.arange(int(len(audio) * ratio)) / ratio).astype(int)
-                idx = np.clip(idx, 0, len(audio) - 1)
-                audio = audio[idx]
-            return audio.astype(np.float32)
-    except Exception:
-        import soundfile as sf  # type: ignore
-
-        audio, file_sr = sf.read(str(path), dtype="float32")
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-        if file_sr != sr:
-            ratio = sr / file_sr
-            idx = (np.arange(int(len(audio) * ratio)) / ratio).astype(int)
-            idx = np.clip(idx, 0, len(audio) - 1)
-            audio = audio[idx]
-        return audio.astype(np.float32)
+def _load_wav(path: Path, sr: int = TARGET_SAMPLE_RATE) -> np.ndarray:
+    return load_wav(path, sr)
 
 
 def mean_embed_voice(
