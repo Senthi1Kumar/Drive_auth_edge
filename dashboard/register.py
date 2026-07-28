@@ -138,14 +138,47 @@ def render_register() -> str:
     @media (max-width: 800px) {
       .grid2 { grid-template-columns: 1fr; }
     }
-    .preview {
+    .cam-wrap {
+      position: relative;
       width: 100%;
       aspect-ratio: 4/3;
       background: #0a0e14;
       border-radius: 10px;
       border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .preview {
+      position: relative;
+      z-index: 0;
+      width: 100%;
+      height: 100%;
       object-fit: cover;
       display: block;
+    }
+    /* Same enroll guide as scripts/capture_own_face.py:
+       guide_h = 0.40 * H, guide_w = 0.85 * guide_h, center (W/2, 0.45*H). */
+    .face-guide-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      pointer-events: none;
+    }
+    .face-guide-label {
+      position: absolute;
+      left: 50%;
+      top: calc(45% + 22%);
+      transform: translateX(-50%);
+      z-index: 3;
+      font-size: 0.72rem;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: rgba(226, 232, 240, 0.95);
+      text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+      pointer-events: none;
+      white-space: nowrap;
     }
     .thumbs {
       display: flex;
@@ -220,6 +253,7 @@ def render_register() -> str:
       border-left: 3px solid var(--accent);
       border-radius: 0 8px 8px 0;
       font-size: 1.05rem;
+      line-height: 1.45;
     }
     .recording {
       animation: pulse 1.1s ease-in-out infinite;
@@ -330,6 +364,7 @@ def render_register() -> str:
     <div class="nav-row">
       <a class="nav" href="/manual">Manual pipeline</a>
       <a class="nav" href="/standalone">Standalone pay</a>
+      <a class="nav" href="/improved-auth">Improved Auth</a>
       <a class="nav" href="/fleet">Fleet health</a>
     </div>
   </header>
@@ -375,10 +410,29 @@ def render_register() -> str:
       <div class="panel" id="panel_face">
         <h3>2 · Face (need 5)</h3>
         <p style="color:var(--muted);font-size:0.85rem;margin:0 0 0.5rem">
-          Close-up frontal at 640×480 — fill the frame with your face (same convention as
-          <code>scripts/capture_own_face.py</code>). Far / tiny faces are rejected at capture time.
+          Close-up frontal at 640×480 — center your face in the green oval
+          (same framing as enroll / Haar gate). Far / tiny faces are rejected at capture time.
         </p>
-        <video id="cam" class="preview" autoplay playsinline muted></video>
+        <div class="cam-wrap">
+          <video id="cam" class="preview" autoplay playsinline muted></video>
+          <svg class="face-guide-svg" viewBox="0 0 100 75" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <mask id="face-guide-mask">
+                <rect width="100" height="75" fill="white" />
+                <ellipse cx="50" cy="33.75" rx="12.75" ry="15" fill="black" />
+              </mask>
+            </defs>
+            <rect width="100" height="75" fill="rgba(0,0,0,0.32)" mask="url(#face-guide-mask)" />
+            <ellipse
+              cx="50" cy="33.75" rx="12.75" ry="15"
+              fill="none"
+              stroke="#22c55e"
+              stroke-width="2.5"
+              vector-effect="non-scaling-stroke"
+            />
+          </svg>
+          <div class="face-guide-label">Place face here</div>
+        </div>
         <div class="row" style="margin-top:0.75rem">
           <button id="btn_cam" class="secondary" type="button">Start camera</button>
           <button id="btn_snap" type="button" disabled>Capture face</button>
@@ -388,10 +442,10 @@ def render_register() -> str:
 
       <div class="panel" id="panel_voice">
         <h3>3 · Voice (need 5)</h3>
-        <p class="phrase" id="phrase">Say: “pay Mom fifty”</p>
+        <p class="phrase" id="phrase">Say: “please pay Mom fifty dollars from my checking account right now”</p>
         <div class="row">
           <button id="btn_mic" class="secondary" type="button">Enable mic</button>
-          <button id="btn_rec" type="button" disabled>Hold to record · 2.5s</button>
+          <button id="btn_rec" type="button" disabled>Hold to record · 5s</button>
         </div>
         <div class="clips" id="voice_clips"></div>
       </div>
@@ -428,12 +482,12 @@ def render_register() -> str:
 
   <script>
     const PHRASES = [
-      "pay Mom fifty",
-      "transfer two hundred to Raj",
-      "open navigation",
-      "pay Starbucks one fifty",
-      "confirm payment now",
-      "send five thousand home",
+      "please pay Mom fifty dollars from my checking account right now",
+      "transfer two hundred dollars to Raj for dinner last weekend",
+      "open navigation and take me home using the fastest route",
+      "pay Starbucks one fifty for my usual morning coffee order",
+      "please confirm this payment and authorize the transfer now",
+      "send five thousand rupees home to my parents this evening",
     ];
 
     const state = {
@@ -738,7 +792,7 @@ def render_register() -> str:
       }
     };
 
-    async function recordClip(seconds = 2.5) {
+    async function recordClip(seconds = 5.0) {
       if (state.locked) throw new Error("enrolled driver is locked");
       if (!state.micStream || !state.audioCtx) throw new Error("Enable mic first");
       if (state.recording) return;
@@ -783,7 +837,7 @@ def render_register() -> str:
 
       state.recording = false;
       $("btn_rec").classList.remove("recording");
-      $("btn_rec").textContent = "Hold to record · 2.5s";
+      $("btn_rec").textContent = "Hold to record · 5s";
 
       const fd = new FormData();
       fd.append("driver_id", driverId());
@@ -805,7 +859,7 @@ def render_register() -> str:
       recordClip().catch((e) => {
         state.recording = false;
         $("btn_rec").classList.remove("recording");
-        $("btn_rec").textContent = "Hold to record · 2.5s";
+        $("btn_rec").textContent = "Hold to record · 5s";
         log("Voice capture failed: " + e.message);
       });
     };

@@ -52,6 +52,7 @@ from driveauth.secrets import (
 from driveauth.standalone_session import IntentSlots, process_audio, process_transcript
 from dashboard.dashboard import render_dashboard
 from dashboard.fleet import render_fleet
+from dashboard.improved_auth import render_improved_auth
 from dashboard.register import render_register
 
 ensure_secrets_loaded()
@@ -732,6 +733,246 @@ def register_page() -> str:
 @app.get("/fleet", response_class=HTMLResponse)
 def fleet_page() -> str:
     return _with_admin_bootstrap(render_fleet())
+
+
+@app.get("/improved-auth", response_class=HTMLResponse)
+def improved_auth_page() -> str:
+    return _with_admin_bootstrap(render_improved_auth())
+
+
+@app.get("/api/improved-auth/status")
+def improved_auth_status_api(driver_id: str = "parth") -> dict[str, Any]:
+    from driveauth.improved_auth import improved_auth_status
+
+    try:
+        return improved_auth_status(_data_root(), _register_store(), driver_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class ImprovedAuthDriverRequest(BaseModel):
+    driver_id: str = Field(..., min_length=1, max_length=32)
+
+
+@app.post("/api/improved-auth/face")
+async def improved_auth_face(
+    _admin: AdminAuth,
+    driver_id: str = Form(...),
+    split: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    from driveauth.improved_auth import FACE_USER_SPLITS, improved_auth_status
+
+    try:
+        driver_id = validate_driver_id(driver_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if split not in FACE_USER_SPLITS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"face split must be one of {FACE_USER_SPLITS}",
+        )
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty image upload")
+    if len(raw) > 8_000_000:
+        raise HTTPException(status_code=400, detail="image too large")
+    # Soft framing check for side/replay — do not hard-reject side angles.
+    path = save_face_jpeg(_data_root(), driver_id, raw, split=split)
+    st = improved_auth_status(_data_root(), _register_store(), driver_id)
+    rel = str(path.relative_to(_data_root()))
+    return {
+        "status": "ok",
+        "path": rel,
+        "data_path": f"data/{rel}",
+        "abs_path": str(path),
+        "split": split,
+        **st,
+    }
+
+
+@app.post("/api/improved-auth/voice")
+async def improved_auth_voice(
+    _admin: AdminAuth,
+    driver_id: str = Form(...),
+    split: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    from driveauth.improved_auth import VOICE_USER_SPLITS, improved_auth_status
+
+    try:
+        driver_id = validate_driver_id(driver_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if split not in VOICE_USER_SPLITS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"voice split must be one of {VOICE_USER_SPLITS}",
+        )
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty audio upload")
+    if len(raw) > 8_000_000:
+        raise HTTPException(status_code=400, detail="audio too large")
+    try:
+        path = save_voice_wav_bytes(_data_root(), driver_id, raw, split=split)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid WAV: {exc}") from exc
+    st = improved_auth_status(_data_root(), _register_store(), driver_id)
+    rel = str(path.relative_to(_data_root()))
+    return {
+        "status": "ok",
+        "path": rel,
+        "data_path": f"data/{rel}",
+        "abs_path": str(path),
+        "split": split,
+        **st,
+    }
+
+
+@app.post("/api/improved-auth/auto-fill")
+def improved_auth_auto_fill(
+    _admin: AdminAuth,
+    req: ImprovedAuthDriverRequest,
+) -> dict[str, Any]:
+    from driveauth.improved_auth import (
+        improved_auth_status,
+        prepare_improved_auth_datasets,
+    )
+
+    try:
+        driver_id = validate_driver_id(req.driver_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        prepared = prepare_improved_auth_datasets(_data_root(), driver_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    st = improved_auth_status(_data_root(), _register_store(), driver_id)
+    return {"status": "ok", "prepared": prepared, **st}
+
+
+@app.get("/api/improved-auth/preview/face/{driver_id}/{split}/{filename}")
+def improved_auth_face_preview(
+    driver_id: str, split: str, filename: str
+) -> FileResponse:
+    try:
+        driver_id = validate_driver_id(driver_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    allowed = {
+        "enroll",
+        "genuine",
+        "attack_replay_screen",
+        "attack_side",
+        "attack_blur",
+    }
+    if split not in allowed:
+        raise HTTPException(status_code=400, detail="invalid split")
+    safe = Path(filename).name
+    if safe != filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    path = (_data_root() / driver_id / "face" / split / safe).resolve()
+    root = (_data_root() / driver_id / "face" / split).resolve()
+    if not str(path).startswith(str(root)) or not path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.post("/api/improved-auth/train")
+def improved_auth_train(
+    _admin: AdminAuth,
+    req: ImprovedAuthDriverRequest,
+) -> dict[str, Any]:
+    """Auto-fill blur/silent, then train Stage-2 heads (skip template re-enroll)."""
+    import subprocess
+    import sys
+
+    from driveauth.improved_auth import (
+        improved_auth_status,
+        prepare_improved_auth_datasets,
+    )
+
+    try:
+        driver_id = validate_driver_id(req.driver_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    data_dir = _data_root() / driver_id
+    store = _register_store()
+    st0 = improved_auth_status(_data_root(), store, driver_id)
+    if not (st0["templates"]["face"] and st0["templates"]["voice"]):
+        raise HTTPException(
+            status_code=400,
+            detail="enroll voice+face templates first on /register",
+        )
+    if not st0["face_user_ok"] or not st0["voice_user_ok"]:
+        raise HTTPException(
+            status_code=400,
+            detail="capture the required face/voice attack boxes first (≥3 each)",
+        )
+
+    try:
+        prepared = prepare_improved_auth_datasets(_data_root(), driver_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    py = sys.executable
+    root = _ROOT
+    logs: list[str] = []
+
+    def _run(cmd: list[str]) -> None:
+        env = os.environ.copy()
+        env["DRIVEAUTH_STAGE2_RAW"] = "1"
+        logs.append("$ " + " ".join(cmd))
+        r = subprocess.run(
+            cmd,
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        if r.stdout:
+            logs.append(r.stdout.strip())
+        if r.stderr:
+            logs.append(r.stderr.strip())
+        if r.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": f"train step failed ({r.returncode})",
+                    "cmd": cmd,
+                    "log": "\n".join(logs[-40:]),
+                },
+            )
+
+    common = [
+        "--store",
+        str(store),
+        "--data",
+        str(data_dir),
+        "--driver-id",
+        driver_id,
+    ]
+    _run(
+        [
+            py,
+            str(root / "scripts" / "train_face_pad.py"),
+            *common,
+            "--exclude-fallback-crops",
+        ]
+    )
+    _run([py, str(root / "scripts" / "train_face_calibrator.py"), *common])
+    _run([py, str(root / "scripts" / "train_voice_calibrator.py"), *common])
+
+    st = improved_auth_status(_data_root(), store, driver_id)
+    return {
+        "status": "ok",
+        "driver_id": driver_id,
+        "prepared": prepared,
+        "log_tail": logs[-60:],
+        **st,
+    }
 
 
 @app.get("/api/fleet/health")

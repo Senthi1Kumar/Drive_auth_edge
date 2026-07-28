@@ -283,6 +283,7 @@ def render_fleet() -> str:
         <a class="nav-link" href="/manual">Manual pipeline</a>
         <a class="nav-link" href="/standalone">Standalone pay</a>
         <a class="nav-link" href="/register">Register driver</a>
+        <a class="nav-link" href="/improved-auth">Improved Auth</a>
         <a class="nav-link active" href="/fleet">Fleet health</a>
       </nav>
     </header>
